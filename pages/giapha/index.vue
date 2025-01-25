@@ -1,6 +1,5 @@
-<!-- FamilyTreeLayout.vue -->
 <template>
-  <div class="tree-container">
+  <div class="tree-wrapper">
     <!-- Search box -->
     <div class="search-box">
       <input
@@ -12,22 +11,13 @@
       <button v-if="searchQuery" @click="clearSearch" class="clear-btn">×</button>
     </div>
 
-    <div class="zoom-controls">
-      <button @click="zoomIn">+</button>
-      <button @click="zoomOut">-</button>
-    </div>
-
-    <div class="scroll-container" :style="{ transform: `scale(${zoom})` }">
-      <v-network-graph
-          :nodes="filteredNodes"
-          :edges="filteredEdges"
-          :layouts="layouts"
-          :configs="configs"
-          :width="2000"
-          :height="1500"
-          @node-click="handleNodeClick"
-      />
-    </div>
+    <v-network-graph
+        :nodes="filteredNodes"
+        :edges="filteredEdges"
+        :layouts="layouts"
+        :configs="configs"
+        @node-click="handleNodeClick"
+    />
 
     <FamilyInfoModal
         :show="showModal"
@@ -43,6 +33,7 @@ import { VNetworkGraph } from 'v-network-graph'
 import 'v-network-graph/lib/style.css'
 import FamilyInfoModal from './FamilyInfoModal.vue'
 import { familyData } from './familyData'
+import _ from 'lodash'
 
 export default {
   name: 'FamilyTreeLayout',
@@ -52,7 +43,6 @@ export default {
   },
   data() {
     return {
-      zoom: 1,
       showModal: false,
       selectedNode: null,
       nodes: familyData.nodes,
@@ -61,7 +51,9 @@ export default {
         nodes: {}
       },
       searchQuery: '',
-      relatedNodes: new Set(), // Store IDs of related nodes
+      relatedNodes: new Set(),
+      nodeSearchCache: new Map(), // Cache for search results
+      relationshipCache: new Map(), // Cache for node relationships
       configs: {
         view: {
           scalingObjects: true,
@@ -71,14 +63,14 @@ export default {
         node: {
           normal: {
             type: 'circle',
-            radius: 35,
+            radius: 18,
             color: (node) => {
               const colors = ['#4169E1', '#1E90FF', '#00BFFF', '#87CEEB', '#87CEFA']
               return colors[node.generation - 1] || '#4169E1'
             },
             label: {
               visible: true,
-              fontSize: 16,
+              fontSize: 20,
               color: '#FFFFFF',
               direction: 'center',
               formatter: (node) => `${node.name.split(' ').pop()}\n(${node.birthYear})`
@@ -126,54 +118,121 @@ export default {
     }
   },
   created() {
+    // Initialize debounced search
+    this.debouncedSearch = _.debounce(this.performSearch, 300)
+
+    // Initialize node search memoization
+    this.memoizedFindNodes = _.memoize(
+        (query) => {
+          const searchLower = query.toLowerCase()
+          return Object.entries(this.nodes)
+              .filter(([, node]) => node.name.toLowerCase().includes(searchLower))
+              .map(([id]) => id)
+        },
+        (query) => query.toLowerCase()
+    )
+
+    // Build relationship cache
+    this.buildRelationshipCache()
+  },
+  mounted() {
     this.initializeEdges()
     this.calculateLayout()
   },
+  beforeDestroy() {
+    // Clean up debounce
+    this.debouncedSearch.cancel()
+  },
   methods: {
+    buildRelationshipCache() {
+      // Build cache of relationships for each node
+      Object.keys(this.nodes).forEach(nodeId => {
+        if (!this.relationshipCache.has(nodeId)) {
+          const related = new Set()
+          this.findRelatedNodes(nodeId, related)
+          this.relationshipCache.set(nodeId, related)
+        }
+      })
+    },
+    findRelatedNodes(nodeId, relatedSet) {
+      const node = this.nodes[nodeId]
+      if (!node || relatedSet.has(nodeId)) return
+
+      // Add current node
+      relatedSet.add(nodeId)
+
+      // Find all ancestors (đi lên trên)
+      this.findAncestors(nodeId, relatedSet)
+
+      // Find all descendants (đi xuống dưới)
+      this.findDescendants(nodeId, relatedSet)
+    },
+
+    findAncestors(nodeId, relatedSet) {
+      const node = this.nodes[nodeId]
+      if (!node) return
+
+      // Add current node and spouse(s)
+      relatedSet.add(nodeId)
+      if (node.spouses) {
+        node.spouses.forEach(spouse => relatedSet.add(spouse.id))
+      }
+
+      // Find and add parents
+      if (node.motherId) {
+        // Add mother
+        relatedSet.add(node.motherId)
+
+        // Find father through mother
+        const father = Object.values(this.nodes).find(n =>
+            n.spouses && n.spouses.some(s => s.id === node.motherId)
+        )
+        if (father) {
+          relatedSet.add(father.id)
+          // Recursively find father's ancestors
+          this.findAncestors(father.id, relatedSet)
+        }
+      }
+    },
+
+    findDescendants(nodeId, relatedSet) {
+      const children = this.getChildren(nodeId)
+
+      children.forEach(child => {
+        // Add child and their spouse(s)
+        relatedSet.add(child.id)
+        if (child.spouses) {
+          child.spouses.forEach(spouse => relatedSet.add(spouse.id))
+        }
+
+        // Recursively find child's descendants
+        this.findDescendants(child.id, relatedSet)
+      })
+    },
     handleSearch() {
       if (!this.searchQuery) {
         this.relatedNodes.clear()
         return
       }
-
-      const searchLower = this.searchQuery.toLowerCase()
+      this.debouncedSearch(this.searchQuery)
+    },
+    performSearch(query) {
+      // Clear current results
       this.relatedNodes.clear()
 
-      // Find matching nodes
-      Object.entries(this.nodes).forEach(([id, node]) => {
-        if (node.name.toLowerCase().includes(searchLower)) {
-          this.addRelatedNodes(id)
-        }
-      })
-    },
-    addRelatedNodes(nodeId) {
-      // Add the node itself
-      this.relatedNodes.add(nodeId)
-      const node = this.nodes[nodeId]
+      // Use memoized search to find matching nodes
+      const matchingIds = this.memoizedFindNodes(query)
 
-      // Add parents
-      if (node.motherId) {
-        const father = Object.values(this.nodes).find(n =>
-            n.spouses && n.spouses.some(s => s.id === node.motherId)
-        )
-        if (father) {
-          this.addRelatedNodes(father.id)
-        }
-      }
-
-      // Add children
-      const children = this.getChildren(nodeId)
-      children.forEach(child => {
-        this.addRelatedNodes(child.id)
+      // For each matching node, find its family connections
+      matchingIds.forEach(id => {
+        this.findRelatedNodes(id, this.relatedNodes)
       })
     },
     clearSearch() {
       this.searchQuery = ''
       this.relatedNodes.clear()
     },
-    // ... rest of the existing methods remain the same
     handleNodeClick(nodeId) {
-      console.log('Node clicked:', nodeId)
       this.selectedNode = this.nodes[nodeId]
       this.showModal = true
     },
@@ -213,39 +272,31 @@ export default {
         generations[node.generation].push(node)
       })
 
-      const levelHeight = 250
-      const nodeSpacing = 200
+      const levelHeight = 120
       Object.entries(generations).forEach(([gen, nodes]) => {
-        const y = (parseInt(gen) - 1) * levelHeight + 50
-        const totalWidth = (nodes.length - 1) * nodeSpacing
-        const startX = (2000 - totalWidth) / 2
+        const y = parseInt(gen) * levelHeight
+        const width = Math.max(document.body.clientWidth, nodes.length * 200)
+        const startX = (width - (nodes.length - 1) * 200) / 2
 
         nodes.forEach((node, index) => {
           this.layouts.nodes[node.id] = {
-            x: startX + index * nodeSpacing,
+            x: startX + index * 200,
             y: y
           }
         })
       })
-    },
-    zoomIn() {
-      this.zoom = Math.min(2, this.zoom + 0.1)
-    },
-    zoomOut() {
-      this.zoom = Math.max(0.5, this.zoom - 0.1)
     }
   }
 }
 </script>
 
 <style scoped>
-.tree-container {
+.tree-wrapper {
   width: 100%;
-  min-height: 100vh;
-  background-color: #FFFFFF;
+  height: 800px;
+  overflow: auto;
   position: relative;
-  display: flex;
-  flex-direction: column;
+  background: white;
 }
 
 .search-box {
@@ -280,41 +331,5 @@ export default {
 
 .clear-btn:hover {
   color: #333;
-}
-
-/* Rest of the existing styles remain the same */
-.scroll-container {
-  width: 100%;
-  height: 100%;
-  min-height: 100vh;
-  overflow: auto;
-  transform-origin: top left;
-}
-
-.zoom-controls {
-  position: fixed;
-  top: 20px;
-  right: 20px;
-  z-index: 1000;
-  display: flex;
-  gap: 8px;
-}
-
-.zoom-controls button {
-  width: 40px;
-  height: 40px;
-  border: 2px solid #ddd;
-  background: white;
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-}
-
-.zoom-controls button:hover {
-  background: #f5f5f5;
 }
 </style>
