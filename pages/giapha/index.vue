@@ -16,8 +16,14 @@
         :edges="filteredEdges"
         :layouts="layouts"
         :configs="configs"
-        @node-click="handleNodeClick"
-    />
+    >
+      <template #override-node="slotProps">
+        <v-shape
+            v-bind="slotProps"
+            @click="handleNodeClick(slotProps.nodeId)"
+        />
+      </template>
+    </v-network-graph>
 
     <FamilyInfoModal
         :show="showModal"
@@ -29,7 +35,7 @@
 </template>
 
 <script>
-import { VNetworkGraph } from 'v-network-graph'
+import { VNetworkGraph, VShape } from 'v-network-graph'
 import 'v-network-graph/lib/style.css'
 import FamilyInfoModal from './FamilyInfoModal.vue'
 import { familyData } from './familyData'
@@ -39,6 +45,7 @@ export default {
   name: 'FamilyTreeLayout',
   components: {
     VNetworkGraph,
+    VShape,
     FamilyInfoModal
   },
   data() {
@@ -52,8 +59,8 @@ export default {
       },
       searchQuery: '',
       relatedNodes: new Set(),
-      nodeSearchCache: new Map(), // Cache for search results
-      relationshipCache: new Map(), // Cache for node relationships
+      nodeSearchCache: new Map(),
+      relationshipCache: new Map(),
       configs: {
         view: {
           scalingObjects: true,
@@ -154,6 +161,7 @@ export default {
         }
       })
     },
+
     findRelatedNodes(nodeId, relatedSet) {
       const node = this.nodes[nodeId]
       if (!node || relatedSet.has(nodeId)) return
@@ -209,6 +217,7 @@ export default {
         this.findDescendants(child.id, relatedSet)
       })
     },
+
     handleSearch() {
       if (!this.searchQuery) {
         this.relatedNodes.clear()
@@ -216,6 +225,7 @@ export default {
       }
       this.debouncedSearch(this.searchQuery)
     },
+
     performSearch(query) {
       // Clear current results
       this.relatedNodes.clear()
@@ -228,18 +238,22 @@ export default {
         this.findRelatedNodes(id, this.relatedNodes)
       })
     },
+
     clearSearch() {
       this.searchQuery = ''
       this.relatedNodes.clear()
     },
+
     handleNodeClick(nodeId) {
       this.selectedNode = this.nodes[nodeId]
       this.showModal = true
     },
+
     closeModal() {
       this.showModal = false
       this.selectedNode = null
     },
+
     getChildren(nodeId) {
       return Object.values(this.nodes).filter(node =>
           Object.values(this.edges).some(edge =>
@@ -249,6 +263,7 @@ export default {
           )
       )
     },
+
     initializeEdges() {
       Object.values(this.nodes).forEach(node => {
         if (node.motherId) {
@@ -265,6 +280,7 @@ export default {
         }
       })
     },
+
     calculateLayout() {
       const generations = {}
       Object.values(this.nodes).forEach(node => {
@@ -331,5 +347,23 @@ export default {
 
 .clear-btn:hover {
   color: #333;
+}
+
+.event-logs {
+  position: absolute;
+  inset: auto 10px 10px auto;
+  margin-left: 10px;
+  padding: 10px;
+  background: #ffff0044;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: monospace;
+  line-height: 11px;
+  pointer-events: none;
+  z-index: 1000;
+}
+
+.event-logs div {
+  word-break: break-all;
 }
 </style>
